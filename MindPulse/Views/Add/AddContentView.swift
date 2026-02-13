@@ -12,7 +12,9 @@ struct AddContentView: View {
             ZStack {
                 Color.mpBackground.ignoresSafeArea()
 
-                if viewModel.showPreview {
+                if viewModel.showManualCardCreation {
+                    manualCardContent
+                } else if viewModel.showPreview {
                     cardPreviewContent
                 } else {
                     inputContent
@@ -77,13 +79,10 @@ struct AddContentView: View {
             }
             .padding(.horizontal)
 
-            // URL 抓取失败兜底
-            if viewModel.showURLFallback {
-                urlFallbackView
-            }
-
-            // 错误信息
-            if let error = viewModel.errorMessage, !viewModel.showURLFallback {
+            // 失败态处理
+            if let failure = viewModel.failureType {
+                failureView(type: failure)
+            } else if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.caption)
                     .foregroundColor(.mpForgot)
@@ -207,33 +206,192 @@ struct AddContentView: View {
         .padding(.horizontal)
     }
 
-    // MARK: - URL Fallback
+    // MARK: - Failure Views
 
-    private var urlFallbackView: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.circle")
-                .foregroundColor(.mpSecondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("网页抓取失败")
+    private func failureView(type: AddContentFailureType) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.circle")
+                    .foregroundColor(.mpSecondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(failureTitle(type))
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.mpBody)
+                    if let msg = viewModel.errorMessage {
+                        Text(msg)
+                            .font(.caption2)
+                            .foregroundColor(.mpCaption)
+                    }
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                // 重试按钮（所有失败态都有）
+                Button {
+                    Task { await viewModel.retry() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("重试")
+                    }
                     .font(.caption)
                     .fontWeight(.semibold)
-                    .foregroundColor(.mpBody)
-                Text("请尝试手动复制文章正文后粘贴")
-                    .font(.caption2)
-                    .foregroundColor(.mpCaption)
+                    .foregroundColor(.mpPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.mpPrimary.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+
+                // 按失败类型显示不同的降级按钮
+                switch type {
+                case .urlFetch:
+                    Button {
+                        viewModel.switchToManualPaste()
+                    } label: {
+                        Text("改为手动粘贴")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.mpSecondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.mpSecondary.opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+
+                case .aiTimeout:
+                    Button {
+                        viewModel.saveToDraft()
+                    } label: {
+                        Text("稍后处理")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.mpCaption)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.mpSurface)
+                            .clipShape(Capsule())
+                    }
+
+                case .aiParseFailed:
+                    Button {
+                        viewModel.switchToManualCardCreation()
+                    } label: {
+                        Text("手动建卡")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.mpSecondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.mpSecondary.opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Spacer()
             }
-            Spacer()
-            Button("切换粘贴") {
-                viewModel.switchToManualPaste()
-            }
-            .font(.caption)
-            .fontWeight(.semibold)
-            .foregroundColor(.mpPrimary)
         }
         .padding(12)
-        .background(Color.mpSecondary.opacity(0.1))
+        .background(Color.mpSecondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal)
+    }
+
+    private func failureTitle(_ type: AddContentFailureType) -> String {
+        switch type {
+        case .urlFetch: return "网页抓取失败"
+        case .aiTimeout: return "AI 请求失败"
+        case .aiParseFailed: return "AI 返回格式异常"
+        }
+    }
+
+    // MARK: - Manual Card Creation
+
+    private var manualCardContent: some View {
+        VStack(spacing: 20) {
+            Text("手动创建卡片")
+                .font(.headline)
+                .foregroundColor(.mpTitle)
+                .padding(.top)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("问题（正面）")
+                    .font(.caption)
+                    .foregroundColor(.mpCaption)
+                TextEditor(text: $viewModel.manualQuestion)
+                    .font(.body)
+                    .frame(minHeight: 80)
+                    .padding(10)
+                    .background(Color.mpCard)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.mpSurface, lineWidth: 1)
+                    )
+            }
+            .padding(.horizontal)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("答案（背面）")
+                    .font(.caption)
+                    .foregroundColor(.mpCaption)
+                TextEditor(text: $viewModel.manualAnswer)
+                    .font(.body)
+                    .frame(minHeight: 80)
+                    .padding(10)
+                    .background(Color.mpCard)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.mpSurface, lineWidth: 1)
+                    )
+            }
+            .padding(.horizontal)
+
+            if let error = viewModel.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.mpForgot)
+                    .padding(.horizontal)
+            }
+
+            Spacer()
+
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.showManualCardCreation = false
+                } label: {
+                    Text("返回")
+                        .font(.subheadline)
+                        .foregroundColor(.mpCaption)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.mpSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                Button {
+                    viewModel.saveManualCard()
+                } label: {
+                    Text("保存卡片")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            !viewModel.manualQuestion.isEmpty && !viewModel.manualAnswer.isEmpty
+                                ? Color.mpPrimary
+                                : Color.mpCaption
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(viewModel.manualQuestion.isEmpty || viewModel.manualAnswer.isEmpty)
+            }
+            .padding(.horizontal)
+            .padding(.bottom)
+        }
     }
 
     // MARK: - Clipboard

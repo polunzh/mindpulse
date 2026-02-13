@@ -19,6 +19,15 @@ final class ReviewViewModel {
     var statusKeyword: String = ""
     var showUndoBanner: Bool = false
 
+    // 撤回上一张卡片
+    var showCardUndoBanner: Bool = false
+    private var lastReviewedCard: Card?
+    private var lastReviewResult: ReviewResult?
+    private var lastReviewLog: ReviewLog?
+    // SM-2 状态快照（用于撤回恢复）
+    private var lastCardSnapshot: (repetition: Int, easeFactor: Double, interval: Int, nextReviewDate: Date)?
+    private var cardUndoTimer: DispatchWorkItem?
+
     // 滑动状态
     var dragOffset: CGSize = .zero
 
@@ -81,12 +90,26 @@ final class ReviewViewModel {
     func swipeCard(result: ReviewResult) {
         guard let card = currentCard, let modelContext else { return }
 
+        // 清除上一次的撤回状态
+        dismissCardUndo()
+
+        // 保存快照用于撤回
+        lastCardSnapshot = (
+            repetition: card.repetition,
+            easeFactor: card.easeFactor,
+            interval: card.interval,
+            nextReviewDate: card.nextReviewDate
+        )
+        lastReviewedCard = card
+        lastReviewResult = result
+
         // 更新 SM-2 状态
         reviewEngine.processReview(card: card, result: result)
 
         // 记录复习日志
         let log = ReviewLog(card: card, result: result)
         modelContext.insert(log)
+        lastReviewLog = log
 
         reviewedCount += 1
         if result == .remembered {
@@ -97,12 +120,67 @@ final class ReviewViewModel {
         if currentIndex + 1 < todayCards.count {
             currentIndex += 1
             isFlipped = false
+
+            // 显示 5 秒撤回提示
+            showCardUndoBanner = true
+            let timer = DispatchWorkItem { [weak self] in
+                self?.showCardUndoBanner = false
+                self?.clearCardUndoState()
+            }
+            cardUndoTimer = timer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
         } else {
             isCompleted = true
             showStatusRecord = true
         }
 
         try? modelContext.save()
+    }
+
+    // MARK: - Undo Last Card
+
+    func undoLastCard() {
+        guard let modelContext,
+              let card = lastReviewedCard,
+              let snapshot = lastCardSnapshot,
+              let log = lastReviewLog else { return }
+
+        // 恢复 SM-2 状态
+        card.repetition = snapshot.repetition
+        card.easeFactor = snapshot.easeFactor
+        card.interval = snapshot.interval
+        card.nextReviewDate = snapshot.nextReviewDate
+
+        // 删除复习日志
+        modelContext.delete(log)
+
+        // 恢复统计
+        reviewedCount -= 1
+        if lastReviewResult == .remembered {
+            rememberedCount -= 1
+        }
+
+        // 回到上一张
+        currentIndex -= 1
+        isFlipped = false
+
+        try? modelContext.save()
+
+        dismissCardUndo()
+        clearCardUndoState()
+    }
+
+    private func dismissCardUndo() {
+        cardUndoTimer?.cancel()
+        cardUndoTimer = nil
+        showCardUndoBanner = false
+    }
+
+    private func clearCardUndoState() {
+        lastReviewedCard = nil
+        lastReviewResult = nil
+        lastReviewLog = nil
+        lastCardSnapshot = nil
     }
 
     // MARK: - Status Record
@@ -112,7 +190,6 @@ final class ReviewViewModel {
 
         let today = Calendar.current.startOfDay(for: Date())
 
-        // 查找今天是否已有记录
         let descriptor = FetchDescriptor<DailyStatus>(
             predicate: #Predicate<DailyStatus> { status in
                 status.date == today

@@ -18,14 +18,26 @@ struct ReviewView: View {
                     reviewContent
                 }
 
+                // 撤回上一张卡片的 Banner
+                if viewModel.showCardUndoBanner {
+                    VStack {
+                        Spacer()
+                        cardUndoBanner
+                            .padding(.bottom, 100)
+                    }
+                    .transition(.move(edge: .bottom))
+                    .animation(.easeInOut, value: viewModel.showCardUndoBanner)
+                }
+
                 // 撤回状态记录的 Banner
                 if viewModel.showUndoBanner {
                     VStack {
                         Spacer()
-                        undoBanner
+                        statusUndoBanner
                             .padding(.bottom, 100)
                     }
                     .transition(.move(edge: .bottom))
+                    .animation(.easeInOut, value: viewModel.showUndoBanner)
                 }
             }
             .navigationTitle("复习")
@@ -159,7 +171,27 @@ struct ReviewView: View {
         }
     }
 
-    private var undoBanner: some View {
+    private var cardUndoBanner: some View {
+        HStack {
+            Text("已提交")
+                .font(.subheadline)
+                .foregroundColor(.white)
+            Spacer()
+            Button("撤回上一张") {
+                viewModel.undoLastCard()
+            }
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(Color.mpBody.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private var statusUndoBanner: some View {
         HStack {
             Text("状态已记录")
                 .font(.subheadline)

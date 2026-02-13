@@ -173,6 +173,7 @@ enum AIServiceError: LocalizedError {
     case invalidResponse
     case apiError(statusCode: Int, message: String)
     case parseError
+    case timeout
 
     var errorDescription: String? {
         switch self {
@@ -184,6 +185,16 @@ enum AIServiceError: LocalizedError {
             return "AI 服务错误 (\(code)): \(message)"
         case .parseError:
             return "无法解析 AI 生成的卡片"
+        case .timeout:
+            return "AI 请求超时，请检查网络连接"
+        }
+    }
+
+    var isTimeout: Bool {
+        switch self {
+        case .timeout: return true
+        case .apiError(let code, _): return code == 408 || code == 529
+        default: return false
         }
     }
 }

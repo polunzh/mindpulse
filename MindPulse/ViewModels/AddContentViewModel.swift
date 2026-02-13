@@ -2,6 +2,12 @@ import Foundation
 import SwiftData
 import SwiftUI
 
+enum AddContentFailureType {
+    case urlFetch        // URL 抓取失败
+    case aiTimeout       // AI 请求超时/网络异常
+    case aiParseFailed   // AI 返回格式异常
+}
+
 @Observable
 final class AddContentViewModel {
     var inputText: String = ""
@@ -9,12 +15,23 @@ final class AddContentViewModel {
     var errorMessage: String?
     var generatedCards: [PreviewCard] = []
     var showPreview: Bool = false
-    var showURLFallback: Bool = false
+    var showManualCardCreation: Bool = false
+
+    // 失败态
+    var failureType: AddContentFailureType?
+    var canRetry: Bool = true
+
+    // 草稿
+    var hasDraft: Bool { draftContent != nil }
+    private var draftContent: String?
+    private var draftSourceType: SourceType?
 
     private let aiService = AIService()
     private let urlParser = URLParserService()
     private var modelContext: ModelContext?
     private var currentSource: Source?
+    private var aiRetryCount = 0
+    private static let maxAIRetry = 1
 
     struct PreviewCard: Identifiable {
         let id = UUID()
@@ -23,6 +40,10 @@ final class AddContentViewModel {
         var sourceQuote: String
         var isSelected: Bool = true
     }
+
+    // 手动建卡
+    var manualQuestion: String = ""
+    var manualAnswer: String = ""
 
     var hasAPIKey: Bool {
         let key = UserDefaults.standard.string(forKey: AIService.apiKeyKey) ?? ""
@@ -51,15 +72,16 @@ final class AddContentViewModel {
 
         isLoading = true
         errorMessage = nil
-        showURLFallback = false
+        failureType = nil
+        aiRetryCount = 0
+
+        let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
             let content: String
             var title: String?
             var domain: String?
             let sourceType: SourceType
-
-            let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if isURL {
                 sourceType = .url
@@ -69,9 +91,8 @@ final class AddContentViewModel {
                     title = parsed.title
                     domain = parsed.domain
                 } catch {
-                    // URL 抓取失败，显示降级选项
                     await MainActor.run {
-                        showURLFallback = true
+                        failureType = .urlFetch
                         errorMessage = "无法抓取网页内容：\(error.localizedDescription)"
                         isLoading = false
                     }
@@ -82,10 +103,13 @@ final class AddContentViewModel {
                 content = trimmedInput
             }
 
-            // 调用 AI 生成卡片
-            let aiCards = try await aiService.generateCards(from: content)
+            // 保存用于重试
+            draftContent = content
+            draftSourceType = sourceType
 
-            // 创建 Source
+            // 调用 AI 生成卡片（含自动重试）
+            let aiCards = try await generateCardsWithRetry(content: content)
+
             let source = Source(
                 type: sourceType,
                 rawContent: trimmedInput,
@@ -95,7 +119,6 @@ final class AddContentViewModel {
             )
             currentSource = source
 
-            // 转换为预览卡片
             let previews = aiCards.map { card in
                 PreviewCard(
                     question: card.question,
@@ -108,19 +131,150 @@ final class AddContentViewModel {
                 generatedCards = previews
                 showPreview = true
                 isLoading = false
+                draftContent = nil
+            }
+        } catch let error as AIServiceError where error.isTimeout {
+            await MainActor.run {
+                failureType = .aiTimeout
+                errorMessage = "AI 请求超时，请检查网络后重试"
+                isLoading = false
+            }
+        } catch is DecodingError {
+            await MainActor.run {
+                failureType = .aiParseFailed
+                errorMessage = "AI 返回格式异常，请尝试手动建卡"
+                isLoading = false
             }
         } catch {
             await MainActor.run {
+                failureType = .aiTimeout
                 errorMessage = error.localizedDescription
                 isLoading = false
             }
         }
     }
 
+    private func generateCardsWithRetry(content: String) async throws -> [AIService.GeneratedCard] {
+        do {
+            return try await aiService.generateCards(from: content)
+        } catch is DecodingError {
+            // JSON 解析失败：自动重试 1 次
+            if aiRetryCount < Self.maxAIRetry {
+                aiRetryCount += 1
+                return try await aiService.generateCards(from: content)
+            }
+            throw AIServiceError.parseError
+        }
+    }
+
+    // MARK: - Retry
+
+    func retry() async {
+        if failureType == .urlFetch {
+            // URL 失败重试：重新从头开始
+            await generateCards()
+        } else if let content = draftContent {
+            // AI 失败重试：直接重新调 AI
+            isLoading = true
+            errorMessage = nil
+            failureType = nil
+            aiRetryCount = 0
+
+            do {
+                let aiCards = try await generateCardsWithRetry(content: content)
+
+                let source = Source(
+                    type: draftSourceType ?? .text,
+                    rawContent: inputText.trimmingCharacters(in: .whitespacesAndNewlines),
+                    extractedText: content
+                )
+                currentSource = source
+
+                let previews = aiCards.map { card in
+                    PreviewCard(
+                        question: card.question,
+                        answer: card.answer,
+                        sourceQuote: card.source_quote
+                    )
+                }
+
+                await MainActor.run {
+                    generatedCards = previews
+                    showPreview = true
+                    isLoading = false
+                    draftContent = nil
+                }
+            } catch {
+                await MainActor.run {
+                    failureType = .aiParseFailed
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        } else {
+            await generateCards()
+        }
+    }
+
+    // MARK: - Save to Draft
+
+    func saveToDraft() {
+        draftContent = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        draftSourceType = isURL ? .url : .text
+        errorMessage = nil
+        failureType = nil
+    }
+
+    func loadDraft() {
+        if let draft = draftContent {
+            inputText = draft
+        }
+    }
+
+    // MARK: - Manual Card Creation
+
+    func switchToManualCardCreation() {
+        showManualCardCreation = true
+        failureType = nil
+        errorMessage = nil
+    }
+
+    func saveManualCard() {
+        guard let modelContext else { return }
+        guard !manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !manualAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        // 创建一个简单的 Source
+        let source = Source(
+            type: .text,
+            rawContent: inputText.isEmpty ? manualQuestion : inputText,
+            extractedText: manualQuestion
+        )
+        modelContext.insert(source)
+
+        let card = Card(
+            question: manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines),
+            answer: manualAnswer.trimmingCharacters(in: .whitespacesAndNewlines),
+            sourceQuote: "",
+            source: source
+        )
+        modelContext.insert(card)
+
+        do {
+            try modelContext.save()
+            manualQuestion = ""
+            manualAnswer = ""
+            showManualCardCreation = false
+            reset()
+        } catch {
+            errorMessage = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Switch to manual paste (URL fallback)
 
     func switchToManualPaste() {
-        showURLFallback = false
+        failureType = nil
         errorMessage = nil
         inputText = ""
     }
@@ -140,10 +294,8 @@ final class AddContentViewModel {
         let selectedCards = generatedCards.filter { $0.isSelected }
         guard !selectedCards.isEmpty else { return }
 
-        // 插入 Source
         modelContext.insert(source)
 
-        // 插入选中的卡片
         for preview in selectedCards {
             let card = Card(
                 question: preview.question,
@@ -168,9 +320,12 @@ final class AddContentViewModel {
         inputText = ""
         generatedCards = []
         showPreview = false
-        showURLFallback = false
+        showManualCardCreation = false
         errorMessage = nil
+        failureType = nil
         currentSource = nil
+        manualQuestion = ""
+        manualAnswer = ""
     }
 
     // MARK: - Clipboard Detection
@@ -179,7 +334,6 @@ final class AddContentViewModel {
         guard let content = UIPasteboard.general.string else { return nil }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 检查是否是 URL 或至少 50 字的文本
         if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
             return trimmed
         }

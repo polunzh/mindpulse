@@ -1,10 +1,17 @@
 import SwiftUI
+import SwiftData
 
 struct OnboardingView: View {
     @Binding var isOnboardingComplete: Bool
+    @Environment(\.modelContext) private var modelContext
     @State private var currentPage = 0
     @State private var showAPIKeyInput = false
     @State private var apiKey = ""
+
+    // 示例卡片体验
+    @State private var showSampleCards = false
+    @State private var sampleIndex = 0
+    @State private var sampleFlipped = false
 
     private let pages: [(icon: String, title: String, subtitle: String)] = [
         (
@@ -24,29 +31,48 @@ struct OnboardingView: View {
         )
     ]
 
+    private let sampleCards: [(question: String, answer: String)] = [
+        (
+            "为什么「间隔重复」比集中复习更有效？",
+            "因为大脑在遗忘边缘重新提取记忆时，会形成更强的神经连接。集中复习产生的是「熟悉感幻觉」，而间隔重复才能产生真正的长期记忆。"
+        ),
+        (
+            "「二八法则」如何应用在个人学习中？",
+            "一个领域 80% 的实用价值来自 20% 的核心知识。先识别并掌握这 20% 的关键概念，比试图全面覆盖更高效。"
+        )
+    ]
+
     var body: some View {
         VStack(spacing: 0) {
-            // Page content
-            TabView(selection: $currentPage) {
-                ForEach(0..<pages.count, id: \.self) { index in
-                    pageView(pages[index])
-                        .tag(index)
+            if showSampleCards {
+                sampleCardExperience
+            } else {
+                // Page content
+                TabView(selection: $currentPage) {
+                    ForEach(0..<pages.count, id: \.self) { index in
+                        pageView(pages[index])
+                            .tag(index)
+                    }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .always))
 
             // Bottom section
             VStack(spacing: 16) {
-                if currentPage == pages.count - 1 {
-                    // 最后一页：配置 API Key
+                if showSampleCards {
+                    // 示例卡片阶段不显示底部按钮（由卡片交互驱动）
+                    EmptyView()
+                } else if currentPage == pages.count - 1 {
                     if showAPIKeyInput {
                         apiKeySection
                     } else {
                         Button {
-                            showAPIKeyInput = true
+                            withAnimation {
+                                showSampleCards = true
+                            }
                         } label: {
-                            Text("开始使用")
+                            Text("先体验一下")
                                 .font(.headline)
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
@@ -71,7 +97,7 @@ struct OnboardingView: View {
                     }
                 }
 
-                if currentPage < pages.count - 1 {
+                if !showSampleCards && currentPage < pages.count - 1 {
                     Button {
                         completeOnboarding()
                     } label: {
@@ -112,6 +138,100 @@ struct OnboardingView: View {
 
             Spacer()
             Spacer()
+        }
+    }
+
+    // MARK: - Sample Card Experience
+
+    private var sampleCardExperience: some View {
+        VStack(spacing: 20) {
+            Text("体验一下")
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(.mpTitle)
+                .padding(.top, 40)
+
+            Text("第 \(sampleIndex + 1)/\(sampleCards.count) 张示例卡片")
+                .font(.caption)
+                .foregroundColor(.mpCaption)
+
+            Spacer()
+
+            // 示例卡片
+            let sample = sampleCards[sampleIndex]
+            VStack(spacing: 16) {
+                if sampleFlipped {
+                    Text(sample.answer)
+                        .font(.body)
+                        .foregroundColor(.mpBody)
+                        .multilineTextAlignment(.center)
+                        .padding(24)
+                } else {
+                    Text(sample.question)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.mpTitle)
+                        .multilineTextAlignment(.center)
+                        .padding(24)
+
+                    Image(systemName: "hand.tap")
+                        .font(.title3)
+                        .foregroundColor(.mpCaption.opacity(0.5))
+                    Text("点击查看答案")
+                        .font(.caption2)
+                        .foregroundColor(.mpCaption.opacity(0.5))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 280)
+            .background(Color.mpCard)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .shadow(color: .black.opacity(0.08), radius: 15, y: 5)
+            .padding(.horizontal, 24)
+            .onTapGesture {
+                if !sampleFlipped {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        sampleFlipped = true
+                    }
+                }
+            }
+
+            Spacer()
+
+            if sampleFlipped {
+                Button {
+                    withAnimation {
+                        if sampleIndex + 1 < sampleCards.count {
+                            sampleIndex += 1
+                            sampleFlipped = false
+                        } else {
+                            // 示例完成，进入 API Key 配置
+                            showSampleCards = false
+                            showAPIKeyInput = true
+                            currentPage = pages.count - 1
+                        }
+                    }
+                } label: {
+                    Text(sampleIndex + 1 < sampleCards.count ? "下一张" : "开始使用")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.mpPrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .padding(.horizontal, 24)
+            }
+
+            Button {
+                showSampleCards = false
+                showAPIKeyInput = true
+                currentPage = pages.count - 1
+            } label: {
+                Text("跳过体验")
+                    .font(.caption)
+                    .foregroundColor(.mpCaption)
+            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -169,7 +289,6 @@ struct OnboardingView: View {
         UserDefaults.standard.set(true, forKey: "onboarding_complete")
         isOnboardingComplete = true
 
-        // 请求通知权限
         Task {
             await NotificationService.shared.requestPermission()
         }
