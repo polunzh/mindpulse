@@ -1,16 +1,16 @@
 import Foundation
 
-/// AI 卡片生成和洞察服务
+/// AI 卡片生成和洞察服务（多模型支持）
 final class AIService {
-    // 用户需要在 Settings 中配置自己的 API Key
-    static let apiKeyKey = "claude_api_key"
+    // 保留旧 key 以向后兼容
+    static let apiKeyKey = AIProviderConfig.currentProvider.apiKeySettingKey
 
-    private var apiKey: String {
-        UserDefaults.standard.string(forKey: Self.apiKeyKey) ?? ""
-    }
-
-    private let baseURL = "https://api.anthropic.com/v1/messages"
-    private let model = "claude-sonnet-4-5-20250929"
+    private let providers: [AIProviderType: AIProvider] = [
+        .claude: ClaudeProvider(),
+        .openAI: OpenAIProvider(),
+        .deepSeek: DeepSeekProvider(),
+        .gemini: GeminiProvider()
+    ]
 
     struct GeneratedCard: Codable {
         let question: String
@@ -50,7 +50,7 @@ final class AIService {
         ---
         """
 
-        let responseText = try await callClaude(prompt: prompt)
+        let responseText = try await callAI(prompt: prompt)
         return try parseCards(from: responseText)
     }
 
@@ -75,60 +75,37 @@ final class AIService {
         \(statsString)
         """
 
-        let responseText = try await callClaude(prompt: prompt)
+        let responseText = try await callAI(prompt: prompt)
         let data = Data(responseText.utf8)
         let result = try JSONDecoder().decode(AIInsight.self, from: data)
         return result.insights
     }
 
-    // MARK: - Claude API Call
+    // MARK: - Unified AI Call
 
-    private func callClaude(prompt: String) async throws -> String {
+    private func callAI(prompt: String) async throws -> String {
+        let providerType = AIProviderConfig.currentProvider
+        let apiKey = AIProviderConfig.currentAPIKey
+        let model = AIProviderConfig.currentModel
+
         guard !apiKey.isEmpty else {
             throw AIServiceError.noAPIKey
         }
 
-        var request = URLRequest(url: URL(string: baseURL)!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 2048,
-            "messages": [
-                ["role": "user", "content": prompt]
-            ]
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
+        guard let provider = providers[providerType] else {
             throw AIServiceError.invalidResponse
         }
 
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
+        do {
+            return try await provider.sendMessage(prompt: prompt, model: model, apiKey: apiKey)
+        } catch let error as URLError where error.code == .timedOut {
+            throw AIServiceError.timeout
         }
-
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let content = json?["content"] as? [[String: Any]],
-              let firstBlock = content.first,
-              let text = firstBlock["text"] as? String else {
-            throw AIServiceError.invalidResponse
-        }
-
-        return text
     }
 
     // MARK: - Parse Cards
 
     private func parseCards(from text: String) throws -> [GeneratedCard] {
-        // 尝试从文本中提取 JSON 数组
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 移除可能的 markdown 代码块标记
@@ -136,6 +113,12 @@ final class AIService {
             let lines = jsonString.components(separatedBy: "\n")
             let filtered = lines.dropFirst().dropLast()
             jsonString = filtered.joined(separator: "\n")
+        }
+
+        // 尝试从文本中提取 JSON 数组（处理模型可能返回前后额外文本的情况）
+        if let start = jsonString.firstIndex(of: "["),
+           let end = jsonString.lastIndex(of: "]") {
+            jsonString = String(jsonString[start...end])
         }
 
         guard let data = jsonString.data(using: .utf8) else {

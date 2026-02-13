@@ -46,8 +46,7 @@ final class AddContentViewModel {
     var manualAnswer: String = ""
 
     var hasAPIKey: Bool {
-        let key = UserDefaults.standard.string(forKey: AIService.apiKeyKey) ?? ""
-        return !key.isEmpty
+        AIProviderConfig.hasAPIKey
     }
 
     var isInputValid: Bool {

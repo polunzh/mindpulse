@@ -2,13 +2,18 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
-    @AppStorage(AIService.apiKeyKey) private var apiKey = ""
     @AppStorage("reminder_hour") private var reminderHour = 9
     @AppStorage("reminder_enabled") private var reminderEnabled = true
     @AppStorage("notification_muted_until") private var mutedUntilTimestamp: Double = 0
 
+    @State private var selectedProvider: AIProviderType = AIProviderConfig.currentProvider
+    @State private var selectedModel: String = AIProviderConfig.currentModel
     @State private var showAPIKey = false
     @State private var tempAPIKey = ""
+
+    private var currentAPIKey: String {
+        AIProviderConfig.apiKey(for: selectedProvider)
+    }
 
     private var isMuted: Bool {
         mutedUntilTimestamp > Date().timeIntervalSince1970
@@ -16,27 +21,47 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            // API 配置
+            // AI 服务商选择
             Section {
+                Picker("AI 服务商", selection: $selectedProvider) {
+                    ForEach(AIProviderType.allCases, id: \.self) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .onChange(of: selectedProvider) { _, newValue in
+                    AIProviderConfig.currentProvider = newValue
+                    selectedModel = newValue.defaultModel
+                    AIProviderConfig.currentModel = newValue.defaultModel
+                }
+
+                Picker("模型", selection: $selectedModel) {
+                    ForEach(selectedProvider.availableModels, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+                .onChange(of: selectedModel) { _, newValue in
+                    AIProviderConfig.currentModel = newValue
+                }
+
                 HStack {
                     Image(systemName: "key.fill")
                         .foregroundColor(.mpPrimary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Claude API Key")
+                        Text("\(selectedProvider.displayName) API Key")
                             .font(.subheadline)
-                        if apiKey.isEmpty {
+                        if currentAPIKey.isEmpty {
                             Text("未配置")
                                 .font(.caption)
                                 .foregroundColor(.mpForgot)
                         } else {
-                            Text(maskedKey)
+                            Text(maskedKey(currentAPIKey))
                                 .font(.caption)
                                 .foregroundColor(.mpCaption)
                         }
                     }
                     Spacer()
-                    Button(apiKey.isEmpty ? "配置" : "修改") {
-                        tempAPIKey = apiKey
+                    Button(currentAPIKey.isEmpty ? "配置" : "修改") {
+                        tempAPIKey = currentAPIKey
                         showAPIKey = true
                     }
                     .font(.caption)
@@ -155,7 +180,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("数据隐私")
                             .font(.subheadline)
-                        Text("所有数据存储在本地。仅生成卡片和洞察时会将内容摘要发送给 Claude AI 服务。")
+                        Text("所有数据存储在本地。仅生成卡片和洞察时会将内容摘要发送给所选 AI 服务。")
                             .font(.caption)
                             .foregroundColor(.mpCaption)
                     }
@@ -185,10 +210,10 @@ struct SettingsView: View {
 
     // MARK: - Masked Key
 
-    private var maskedKey: String {
-        guard apiKey.count > 10 else { return "••••••••" }
-        let prefix = String(apiKey.prefix(7))
-        let suffix = String(apiKey.suffix(4))
+    private func maskedKey(_ key: String) -> String {
+        guard key.count > 10 else { return "••••••••" }
+        let prefix = String(key.prefix(7))
+        let suffix = String(key.suffix(4))
         return "\(prefix)•••\(suffix)"
     }
 
@@ -197,22 +222,22 @@ struct SettingsView: View {
     private var apiKeySheet: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Text("输入你的 Claude API Key")
+                Text("输入 \(selectedProvider.displayName) API Key")
                     .font(.headline)
                     .foregroundColor(.mpTitle)
 
-                Text("可以在 console.anthropic.com 获取")
+                Text(apiKeyHelpText)
                     .font(.caption)
                     .foregroundColor(.mpCaption)
 
-                SecureField("sk-ant-...", text: $tempAPIKey)
+                SecureField(selectedProvider.apiKeyPlaceholder, text: $tempAPIKey)
                     .font(.system(.body, design: .monospaced))
                     .padding(12)
                     .background(Color.mpSurface)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 Button {
-                    apiKey = tempAPIKey
+                    AIProviderConfig.setAPIKey(tempAPIKey, for: selectedProvider)
                     showAPIKey = false
                 } label: {
                     Text("保存")
@@ -239,6 +264,15 @@ struct SettingsView: View {
             }
         }
         .presentationDetents([.medium])
+    }
+
+    private var apiKeyHelpText: String {
+        switch selectedProvider {
+        case .claude: return "可以在 console.anthropic.com 获取"
+        case .openAI: return "可以在 platform.openai.com 获取"
+        case .deepSeek: return "可以在 platform.deepseek.com 获取"
+        case .gemini: return "可以在 aistudio.google.com 获取"
+        }
     }
 }
 

@@ -7,6 +7,7 @@ struct OnboardingView: View {
     @State private var currentPage = 0
     @State private var showAPIKeyInput = false
     @State private var apiKey = ""
+    @State private var selectedProvider: AIProviderType = .claude
 
     // 示例卡片体验
     @State private var showSampleCards = false
@@ -239,7 +240,7 @@ struct OnboardingView: View {
 
     private var apiKeySection: some View {
         VStack(spacing: 12) {
-            Text("配置 Claude API Key")
+            Text("配置 AI 服务")
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .foregroundColor(.mpTitle)
@@ -248,7 +249,14 @@ struct OnboardingView: View {
                 .font(.caption)
                 .foregroundColor(.mpCaption)
 
-            SecureField("sk-ant-...", text: $apiKey)
+            Picker("AI 服务商", selection: $selectedProvider) {
+                ForEach(AIProviderType.allCases, id: \.self) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            SecureField(selectedProvider.apiKeyPlaceholder, text: $apiKey)
                 .font(.system(.body, design: .monospaced))
                 .padding(12)
                 .background(Color.mpSurface)
@@ -269,7 +277,9 @@ struct OnboardingView: View {
 
                 Button {
                     if !apiKey.isEmpty {
-                        UserDefaults.standard.set(apiKey, forKey: AIService.apiKeyKey)
+                        AIProviderConfig.currentProvider = selectedProvider
+                        AIProviderConfig.setAPIKey(apiKey, for: selectedProvider)
+                        AIProviderConfig.currentModel = selectedProvider.defaultModel
                     }
                     completeOnboarding()
                 } label: {
